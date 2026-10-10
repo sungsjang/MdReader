@@ -2,7 +2,12 @@ name: build
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   windows:
@@ -13,21 +18,38 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Version
+        shell: pwsh
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.4.0' }
+          "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Portable (framework-dependent, single file)
-        run: dotnet publish src/MdReader/MdReader.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish/portable
+        run: dotnet publish src/MdReader/MdReader.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:Version=${{ env.APP_VERSION }} -o publish/portable
 
       - name: Install Inno Setup
         run: if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
 
       - name: Installer
         shell: pwsh
-        run: ./installer/build-installer.ps1 -Version 0.4.0
+        run: ./installer/build-installer.ps1 -Version $env:APP_VERSION
+
+      - name: Zip portable
+        shell: pwsh
+        run: Compress-Archive -Path publish/portable/* -DestinationPath "dist/MdReader-portable-$env:APP_VERSION.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MdReader-portable-win-x64
-          path: publish/portable
-      - uses: actions/upload-artifact@v4
+          name: MdReader-${{ env.APP_VERSION }}
+          path: dist/*
+
+      # v로 시작하는 태그를 올리면 Releases 페이지에 설치 파일을 올린다
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
-          name: MdReader-Setup
-          path: dist/*.exe
+          name: MdReader ${{ env.APP_VERSION }}
+          files: |
+            dist/*.exe
+            dist/*.zip
+          generate_release_notes: true
