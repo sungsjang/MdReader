@@ -41,6 +41,9 @@ public partial class MainWindow : Window
     int _vaultSeq;
 
     readonly List<string> _pendingPaths = new();
+    readonly Dictionary<string, TextFormat> _formats = new(StringComparer.OrdinalIgnoreCase);         // 파일 → 인코딩·줄바꿈
+    readonly Dictionary<string, DateTime> _suppressReloadUntil = new(StringComparer.OrdinalIgnoreCase); // 직접 저장 직후 자동 새로고침 무시
+    bool _dirty;                                                                                         // 편집 중 저장 안 한 변경
     FileSystemWatcher? _fileWatcher;
     CancellationTokenSource? _searchCts;
     bool _webReady;
@@ -62,7 +65,16 @@ public partial class MainWindow : Window
 
         SourceInitialized += (_, _) => Native.SetDarkTitleBar(new WindowInteropHelper(this).Handle, dark);
         Loaded += async (_, _) => await InitWebViewAsync();
-        Closing += (_, _) => SaveSession();
+        Closing += (_, e) =>
+        {
+            if (_dirty && MessageBox.Show(this, "저장하지 않은 변경 사항이 있습니다.\n저장하지 않고 닫을까요?", "MdReader",
+                    MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel) != MessageBoxResult.OK)
+            {
+                e.Cancel = true;
+                return;
+            }
+            SaveSession();
+        };
         Closed += (_, _) =>
         {
             _fileWatcher?.Dispose();
@@ -191,6 +203,10 @@ public partial class MainWindow : Window
                 case "switchTab": SwitchTab(Int("id"), Scroll()); break;
                 case "reopenTab": ReopenClosedTab(Scroll()); break;
                 case "scrollPos": SaveScroll(Scroll()); break;
+
+                // 편집
+                case "save": SaveDocument(Str("reqId"), Str("path"), Str("text"), msg.TryGetProperty("baseMtime", out var bm) && bm.ValueKind == JsonValueKind.Number ? bm.GetInt64() : 0, Bool("force")); break;
+                case "dirty": _dirty = Bool("value"); break;
 
                 // 문서 열기·이동
                 case "open": ShowOpenDialog(Scroll()); break;
@@ -480,9 +496,16 @@ public partial class MainWindow : Window
         }
 
         string text;
-        try { text = TextFile.Read(path); }
+        bool readOk = true;
+        try
+        {
+            var (t, fmt) = TextFile.ReadDetailed(path);
+            text = t;
+            _formats[path] = fmt;
+        }
         catch (Exception ex)
         {
+            readOk = false;
             text = $"> [!danger] 파일을 열 수 없습니다\n> {ex.Message}\n>\n> `{path}`";
         }
 
@@ -518,9 +541,53 @@ public partial class MainWindow : Window
             canBack = _active.History.CanBack,
             canForward = _active.History.CanForward,
             restored,
+            mtime = MtimeOf(path),
+            editable = readOk && IsWritable(path),
             recent = _settings.Recent.Take(10).ToArray(),
             css = _settings.CssSnippets ? vault.GetSnippetCss() : null
         });
+    }
+
+    // ───────────────────────── 편집 · 저장 ─────────────────────────
+
+    static long MtimeOf(string path)
+    {
+        try { return new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds(); }
+        catch { return 0; }
+    }
+
+    static bool IsWritable(string path)
+    {
+        try { return (File.GetAttributes(path) & FileAttributes.ReadOnly) == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>편집 모드에서 Ctrl+S. 다른 곳에서 파일이 바뀌었으면(force 아님) 충돌로 알린다.</summary>
+    void SaveDocument(string reqId, string path, string text, long baseMtime, bool force)
+    {
+        // 열려 있는 탭의 파일만 저장할 수 있다
+        if (!_tabs.Any(t => SamePath(t.Path, path)) || !ViewableExt.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+        {
+            Post(new { type = "saveResult", reqId, ok = false, error = "저장할 수 없는 파일입니다." });
+            return;
+        }
+        try
+        {
+            if (File.Exists(path) && !force && baseMtime != 0 && MtimeOf(path) != baseMtime)
+            {
+                Post(new { type = "saveResult", reqId, ok = false, conflict = true });
+                return;
+            }
+            var fmt = _formats.TryGetValue(path, out var f) ? f : TextFormat.Default;
+            _suppressReloadUntil[path] = DateTime.UtcNow.AddSeconds(2);
+            TextFile.Write(path, text, fmt);
+            _dirty = false;
+            Post(new { type = "saveResult", reqId, ok = true, path, mtime = MtimeOf(path) });
+        }
+        catch (Exception ex)
+        {
+            Post(new { type = "saveResult", reqId, ok = false, error = ex.Message });
+        }
     }
 
     // ───────────────────────── 링크 ─────────────────────────
@@ -706,6 +773,7 @@ public partial class MainWindow : Window
             };
             void Handler(object sender, FileSystemEventArgs e) => _reloadDebounce.Trigger(() =>
             {
+                if (_suppressReloadUntil.TryGetValue(path, out var until) && DateTime.UtcNow < until) return; // 방금 직접 저장한 것
                 if (_active?.Path is { } cur && SamePath(cur, path) && File.Exists(cur)) ShowActive(keepScroll: true);
             });
             w.Changed += Handler;

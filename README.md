@@ -1,6 +1,6 @@
 # MdReader
 
-Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
+Obsidian 노트를 잘 읽는 **마크다운 뷰어** (Windows) — 필요할 때는 간단히 고칠 수도 있습니다.
 아크로뱃 리더가 PDF를 "보기만" 하듯, `.md` 파일을 더블클릭하면 바로 깔끔하게 열어 줍니다.
 
 - C# / .NET 8 WPF + WebView2(Windows 10/11 기본 탑재) — 설치 파일 작고 가벼움
@@ -34,6 +34,11 @@ Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
     결과를 누르면 해당 노트가 열리고 검색어가 문서 안에서 강조됨
   - 목차: 현재 위치 강조
   - 백링크: 이 노트를 `[[링크]]`·`[텍스트](노트.md)`로 가리키는 노트와 그 줄
+- **편집 모드** (Ctrl+E) — 평소엔 읽기, 필요할 때만 원문 편집. `편집`/`나란히`(편집+실시간 미리보기) 전환, Ctrl+S 저장
+  - 마크다운 문법 색 구분, `[[`를 치면 노트 이름 자동완성, 목록에서 Enter 시 자동 이어쓰기
+  - Ctrl+B 굵게 · Ctrl+I 기울임 · Ctrl+Shift+H 하이라이트 · Ctrl+K 링크 · Ctrl+F 찾기/바꾸기 · Ctrl+Z 되돌리기
+  - 원래 인코딩(UTF-8/BOM/CP949)과 줄바꿈(CRLF/LF)을 유지해 저장, 임시 파일에 쓴 뒤 바꿔치기해서 저장 중 끊겨도 원본 보호
+  - 저장 안 한 상태로 다른 문서로 이동·탭 닫기·창 닫기 시 확인, Obsidian 등 바깥에서 같은 파일이 바뀌면 알림·덮어쓰기 확인
 - **링크 미리보기** — 내부 링크에 마우스를 올리면 그 노트(또는 `#제목`·`#^블록` 구간, 그림)를 팝업으로 보여줌. 메뉴에서 끌 수 있음
 - **빠른 이동** (Ctrl+P) — 노트 이름 일부나 **초성**(`ㅍㄹㅈㅌ` → 프로젝트 계획)으로 바로 열기. 빈 칸이면 최근 파일
 - **읽던 위치 기억** — 파일을 다시 열면 마지막으로 읽던 곳에서 시작 (최근 300개 파일)
@@ -49,6 +54,7 @@ Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
 
 | 단축키 | 동작 |
 |---|---|
+| Ctrl+E / Ctrl+S | 편집 모드 전환 / 저장 |
 | Ctrl+P | 빠른 이동 (노트 이름·초성) |
 | Ctrl+O | 열기 (여러 개 선택 가능) |
 | Ctrl+T / Ctrl+W / Ctrl+Shift+T | 새 탭 / 탭 닫기 / 닫은 탭 다시 열기 |
@@ -81,8 +87,8 @@ GitHub에 올리면 `.github/workflows/build.yml`이 Windows 러너에서 포터
 [Inno Setup 6](https://jrsoftware.org/isdl.php)을 설치(`winget install JRSoftware.InnoSetup`)한 뒤:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 0.3.0
-# → dist\MdReader-Setup-0.3.0.exe
+powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 0.4.0
+# → dist\MdReader-Setup-0.4.0.exe
 ```
 
 설치 파일은 .NET 런타임을 포함(self-contained)하므로 다른 PC에 .NET이 없어도 됩니다.
@@ -98,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 
 
 ### 뷰어 라이브러리 갱신 (선택)
 
-`wwwroot/vendor`는 이미 빌드되어 있습니다. 버전을 올리고 싶을 때만:
+`wwwroot/vendor`는 이미 빌드되어 있습니다. 버전을 올리고 싶을 때만 (또는 `tools/vendor`를 바꿔 올리면 `vendor` 워크플로가 `vendor-bundle` 브랜치에 새 번들을 만들어 줍니다):
 
 ```powershell
 cd tools\vendor
@@ -120,8 +126,9 @@ src/MdReader/
   wwwroot/
     index.html, css/app.css
     js/obsidian.js         Obsidian 문법 렌더러 (markdown-it 플러그인)
-    js/app.js              뷰어 UI (탭, 사이드바, 찾기, 테마, 임베드 처리, 호스트 통신)
-    vendor/                markdown-it, KaTeX, highlight.js, DOMPurify, js-yaml, Mermaid
+    js/app.js              뷰어 UI (탭, 사이드바, 찾기, 테마, 편집 모드, 임베드 처리, 호스트 통신)
+    js/editor.js           편집기 구성 (CodeMirror 6)
+    vendor/                markdown-it, KaTeX, highlight.js, DOMPurify, js-yaml, Mermaid, CodeMirror 6(editor.js)
 installer/                 Inno Setup 스크립트 + 빌드 스크립트
 samples/SampleVault/       렌더링 확인용 샘플 볼트 (CSS 스니펫 포함)
 tests/render_test.py       헤드리스 Chromium 렌더링 테스트 (Playwright)
@@ -136,10 +143,11 @@ tests/render_test.py       헤드리스 Chromium 렌더링 테스트 (Playwright
 - [x] 3단계 읽기 편의 — 목차, 찾기, 수식, Mermaid, 구문 강조, 확대, 기록
 - [x] 4단계 — 탭·단일 창, 파일 탐색 사이드바, 백링크, 볼트 검색·태그 검색, CSS 스니펫, 설치 프로그램
 - [x] 링크 미리보기, 빠른 이동(초성 검색), 읽던 위치 기억
-- [ ] 다음 후보 — 탭 끌어서 순서 바꾸기, 나가는 링크/언링크드 멘션, 그래프 뷰, Canvas(.canvas) 보기,
+- [x] 간단한 편집 모드 (편집/나란히, 저장, 자동완성, 충돌 확인)
+- [ ] 다음 후보 — 새 노트 만들기, 그림 붙여넣기, 탭 끌어서 순서 바꾸기, 나가는 링크/언링크드 멘션, 그래프 뷰, Canvas(.canvas) 보기,
       Obsidian 테마(.obsidian/themes) 적용, 자동 업데이트
 
 ## 라이선스
 
 포함된 라이브러리: markdown-it(MIT), KaTeX(MIT), highlight.js(BSD-3), DOMPurify(Apache-2.0/MPL-2.0),
-js-yaml(MIT), Mermaid(MIT). 각 라이브러리의 라이선스를 따릅니다.
+js-yaml(MIT), Mermaid(MIT), CodeMirror(MIT). 각 라이브러리의 라이선스를 따릅니다.

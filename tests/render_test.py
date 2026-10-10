@@ -59,7 +59,7 @@ window.__sent = [];
     reply(Object.assign({ type: 'load', tabId: t.id, path: p, name: p.split('/').pop().replace(/\.md$/, ''),
       relPath: p, vaultKey: 'v1.mdreader', vaultName: 'SampleVault', vaultRoot: 'C:/SampleVault', isVault: true,
       markdown: window.__notes[p], notes: t.sentIndex ? null : files, scroll: 0,
-      canBack: t.i > 0, canForward: t.i < t.hist.length - 1, recent: ['Notes/프로젝트 계획.md'], css: H.css ? window.__css : null }, extra || {}));
+      canBack: t.i > 0, canForward: t.i < t.hist.length - 1, editable: true, mtime: 1000 + t.i, recent: ['Notes/프로젝트 계획.md'], css: H.css ? window.__css : null }, extra || {}));
     t.sentIndex = true;
   }
   function addTab() { const t = { id: ++H.seq, hist: [], i: -1 }; H.tabs.push(t); return t; }
@@ -100,6 +100,11 @@ window.__sent = [];
         reply({ type: 'backlinks', reqId: msg.reqId, path: target, items });
         break;
       }
+      case 'save': {
+        window.__notes[msg.path] = msg.text;
+        reply({ type: 'saveResult', reqId: msg.reqId, ok: true, path: msg.path, mtime: Date.now() });
+        break;
+      }
       case 'search': {
         const terms = msg.query.split(/\s+/).filter(Boolean);
         const items = Object.entries(window.__notes).filter(([p, txt]) =>
@@ -135,7 +140,13 @@ def main():
         page = browser.new_page(viewport={"width": 1280, "height": 860})
         page.on("pageerror", lambda e: errors.append("pageerror: " + str(e)))
         page.on("console", lambda m: m.type in ("error", "warning") and errors.append(f"console.{m.type}: {m.text}"))
-        page.on("dialog", lambda d: (errors.append("DIALOG (xss!): " + d.message), d.dismiss()))
+        dialogs = []
+        def on_dialog(dlg):
+            if dlg.type == "confirm":
+                dialogs.append(dlg.message.split("\n")[0]); dlg.accept()
+            else:
+                errors.append("DIALOG (xss!): " + dlg.message); dlg.dismiss()
+        page.on("dialog", on_dialog)
         page.route("https://app.mdreader/**", lambda r: serve(r, WWW, "https://app.mdreader/"))
         page.route("https://v1.mdreader/**", lambda r: serve(r, VAULT, "https://v1.mdreader/"))
         page.add_init_script(MOCK)
@@ -239,6 +250,43 @@ def main():
         results["after_switch_title"] = d("document.getElementById('file-name').textContent")
         results["scroll_reports"] = d("window.__sent.filter(m => m.type === 'scrollPos').length")
 
+        # ── 편집 모드 ──
+        page.keyboard.press("Control+1")
+        page.wait_for_timeout(400)
+        page.keyboard.press("Control+e")
+        page.wait_for_selector("#editor .cm-editor", timeout=5000)
+        results["editor_has_text"] = d("document.querySelector('#editor .cm-content').innerText.trim().length > 20")
+        page.keyboard.press("Control+End")
+        page.keyboard.type("\n\n새 문단 한글 입력 [[프로")
+        page.wait_for_selector(".cm-tooltip-autocomplete li", timeout=3000)
+        results["autocomplete"] = d("[...document.querySelectorAll('.cm-tooltip-autocomplete li')].map(li => li.textContent).slice(0, 3)")
+        page.keyboard.press("Enter")
+        page.keyboard.type(" 참고. **굵게**")
+        results["dirty_dot"] = d("!document.getElementById('dirty-dot').hidden")
+        results["tab_marker"] = d("document.querySelector('.tab.active .tab-title').textContent")
+        page.click("#edit-modes button[data-mode=split]")
+        page.wait_for_timeout(500)
+        results["split_preview_link"] = d("[...document.querySelectorAll('#split-preview a.internal-link')].some(a => a.textContent === '프로젝트 계획' && a.closest('p') && a.closest('p').textContent.includes('새 문단'))")
+        page.screenshot(path=str(OUT / "7-split-edit.png"))
+        page.keyboard.press("Control+s")
+        page.wait_for_timeout(300)
+        saved = d("window.__sent.filter(m => m.type === 'save').map(m => m.text.slice(-40))")
+        results["saved_tail"] = saved
+        results["dirty_after_save"] = d("!document.getElementById('dirty-dot').hidden")
+        # 바깥 변경 + 저장 안 한 편집 → 배너
+        page.keyboard.type(" 추가")
+        ext = d("(() => { const m = window.__sent.filter(x => x.type === 'save').pop(); return { path: m.path, tab: +document.querySelector('.tab.active').dataset.id }; })()")
+        page.evaluate("(e) => window.__mdreader.handle({type:'load', tabId: e.tab, path: e.path, name: 'x', relPath: e.path, vaultKey: 'v1.mdreader', vaultName: 'SampleVault', isVault: true, markdown: '# 바깥에서 바뀜', keepScroll: true, editable: true, mtime: 99999})", ext)
+        page.wait_for_timeout(200)
+        results["external_banner"] = d("!document.getElementById('edit-banner').hidden")
+        results["debug_after_external"] = d("({mode: document.body.className, editor: !!document.querySelector('#editor .cm-editor'), dot: !document.getElementById('dirty-dot').hidden, title: document.getElementById('file-name').textContent})")
+        if results["external_banner"]:
+            page.click("#edit-banner button[data-cmd=keepMine]")
+        # 저장 안 한 상태로 탭 이동 → 확인 창
+        page.keyboard.press("Control+Tab")
+        page.wait_for_timeout(500)
+        results["leave_confirm"] = dialogs[-1] if dialogs else None
+        results["after_leave_mode"] = d("document.body.className")
         browser.close()
     print(json.dumps(results, ensure_ascii=False, indent=1))
     print("errors:", json.dumps(errors, ensure_ascii=False, indent=1))

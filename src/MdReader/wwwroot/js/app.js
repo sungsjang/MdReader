@@ -22,7 +22,34 @@
   const tocList = $('#toc-list');
 
   const webview = window.chrome && window.chrome.webview;
+
+  // 편집 모드 상태
+  const edit = {
+    mode: 'read',          // read | edit | split
+    lastMode: 'edit',      // Ctrl+E 로 들어갈 모드
+    editor: null,
+    path: null,
+    baseMtime: 0,
+    dirty: false,
+    pendingExternal: null, // { markdown, mtime }
+    loading: null,
+    saveSeq: 0,
+    waiters: new Map(),
+    previewTimer: null
+  };
+
+  // 문서를 떠나는 동작들 — 저장 안 한 변경이 있으면 먼저 묻는다
+  const LEAVE_TYPES = new Set(['navigate', 'navigateHref', 'openRel', 'openPath', 'switchTab', 'back', 'forward',
+    'newTab', 'open', 'reopenTab', 'closeTab']);
+
   function send(msg) {
+    if (edit.dirty && !msg.__ok && LEAVE_TYPES.has(msg.type) &&
+        !(msg.type === 'closeTab' && msg.id !== state.activeTab)) {
+      const go = window.confirm('저장하지 않은 변경 사항이 있습니다.\n저장하고 계속할까요?\n\n(취소를 누르면 지금 문서에 머뭅니다)');
+      if (go) saveDoc(false).then((ok) => { if (ok) send(Object.assign(msg, { __ok: true })); });
+      return;
+    }
+    delete msg.__ok;
     if (webview) webview.postMessage(msg);
     else if (window.__mockHost) window.__mockHost(msg);
   }
@@ -141,10 +168,19 @@
 
     const sameDoc = prev && prev.path === msg.path && prev.tabId === msg.tabId;
     const keepScroll = msg.keepScroll && sameDoc ? mainEl.scrollTop : null;
-    const out = renderer.render(msg.markdown, { isResolved });
 
-    docEl.className = 'markdown-body markdown-preview-view markdown-rendered ' + cssClassesFrom(out.frontmatter).join(' ');
-    docEl.replaceChildren(buildFragment(out.html, { from: msg.path, depth: 0 }));
+    // 편집 중인 문서가 다시 들어온 경우(바깥 변경·탭 복귀) / 다른 문서로 이동한 경우
+    if (edit.editor) {
+      if (msg.path === edit.path && sameDoc) {
+        onEditedFileReloaded(msg);
+      } else {
+        destroyEditor();
+        if (edit.mode !== 'read') applyMode('read');
+      }
+    }
+    $('#btn-edit').disabled = !msg.editable;
+
+    renderBody(msg.markdown);
     docEl.hidden = false;
     $('#welcome').hidden = true;
     applyZoom();
@@ -155,10 +191,6 @@
     $('#menu-obsidian').hidden = !msg.isVault;
     document.title = (msg.name || 'MdReader') + ' — MdReader';
     setHistory(msg);
-
-    resolveEmbeds(docEl);
-    buildToc();
-    renderMermaid(docEl);
 
     if (keepScroll !== null) mainEl.scrollTop = keepScroll;
     else if (msg.anchor) requestAnimationFrame(() => scrollToAnchor(msg.anchor));
@@ -178,6 +210,196 @@
       $('#bl-badge').hidden = true;
     }
     if (state.sidebarVisible && state.sidebarPane === 'backlinks') requestBacklinks();
+  }
+
+  /** 읽기 화면(#doc)을 주어진 마크다운으로 다시 그린다 */
+  function renderBody(markdown) {
+    const out = renderer.render(markdown, { isResolved });
+    docEl.className = 'markdown-body markdown-preview-view markdown-rendered ' + cssClassesFrom(out.frontmatter).join(' ');
+    docEl.replaceChildren(buildFragment(out.html, { from: state.doc.path, depth: 0 }));
+    state.renderedText = markdown;
+    resolveEmbeds(docEl);
+    buildToc();
+    renderMermaid(docEl);
+  }
+
+  // ───────────── 편집 모드 ─────────────
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = src;
+      el.onload = resolve;
+      el.onerror = () => reject(new Error(src));
+      document.head.appendChild(el);
+    });
+  }
+  function loadEditorLib() {
+    if (window.MdEditor && window.CM) return Promise.resolve();
+    if (!edit.loading) edit.loading = loadScript('vendor/editor.js').then(() => loadScript('js/editor.js'));
+    return edit.loading;
+  }
+
+  function noteList() {
+    return switcherItems().map((it) => ({ name: it.name, dir: it.dir }));
+  }
+
+  function destroyEditor() {
+    if (!edit.editor) return;
+    edit.editor.destroy();
+    edit.editor = null;
+    edit.path = null;
+    edit.pendingExternal = null;
+    $('#edit-banner').hidden = true;
+    setDirty(false);
+  }
+
+  function setDirty(v) {
+    if (edit.dirty === v) return;
+    edit.dirty = v;
+    send({ type: 'dirty', value: v });
+    $('#dirty-dot').hidden = !v;
+    document.title = (v ? '● ' : '') + ((state.doc && state.doc.name) || 'MdReader') + ' — MdReader';
+    renderTabs({ tabs: state.tabs, active: state.activeTab });
+  }
+
+  function currentScrollRatio() {
+    if (edit.mode !== 'read' && edit.editor) return edit.editor.scrollRatio();
+    const max = mainEl.scrollHeight - mainEl.clientHeight;
+    return max > 0 ? mainEl.scrollTop / max : 0;
+  }
+
+  async function setMode(mode) {
+    if (mode === edit.mode) return;
+    if (mode !== 'read') {
+      if (!state.doc) { toast('먼저 문서를 여세요.'); return; }
+      if (!state.doc.editable) { toast('이 파일은 편집할 수 없습니다 (읽기 전용 또는 읽기 오류).'); return; }
+      try { await loadEditorLib(); } catch (e) { toast('⚠ 편집기를 불러오지 못했습니다: ' + e.message); return; }
+      if (!edit.editor || edit.path !== state.doc.path) {
+        destroyEditor();
+        edit.editor = window.MdEditor.create($('#editor'), {
+          doc: state.doc.markdown,
+          getNotes: noteList,
+          onChange: onEditorChange,
+          onSave: () => saveDoc(false),
+          onToggle: () => setMode('read'),
+          onScroll: syncSplitScroll
+        });
+        edit.path = state.doc.path;
+        edit.baseMtime = state.doc.mtime || 0;
+      }
+      edit.lastMode = mode;
+    }
+    const ratio = currentScrollRatio();
+    applyMode(mode);
+    if (mode === 'read') {
+      if (edit.editor) {
+        const text = edit.editor.getText();
+        if (text !== state.renderedText) renderBody(text);
+      }
+      requestAnimationFrame(() => {
+        const max = mainEl.scrollHeight - mainEl.clientHeight;
+        programmaticScroll = true;
+        mainEl.scrollTop = ratio * Math.max(0, max);
+      });
+    } else {
+      if (mode === 'split') renderSplit(true);
+      requestAnimationFrame(() => { edit.editor.setScrollRatio(ratio); syncSplitScroll(); edit.editor.focus(); });
+    }
+  }
+
+  function applyMode(mode) {
+    edit.mode = mode;
+    document.body.classList.toggle('mode-edit', mode === 'edit');
+    document.body.classList.toggle('mode-split', mode === 'split');
+    $('#btn-edit').classList.toggle('on', mode !== 'read');
+    $('#btn-edit').title = mode === 'read' ? '편집 (Ctrl+E)' : '읽기로 돌아가기 (Ctrl+E)';
+    $('#edit-modes').hidden = mode === 'read';
+    $('#btn-save').hidden = mode === 'read' && !edit.dirty;
+    document.querySelectorAll('#edit-modes button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+    hidePreview(true);
+    if (mode !== 'read') closeFind();
+  }
+
+  function onEditorChange() {
+    setDirty(true);
+    $('#btn-save').hidden = false;
+    if (edit.mode === 'split') {
+      clearTimeout(edit.previewTimer);
+      edit.previewTimer = setTimeout(() => renderSplit(false), 250);
+    }
+  }
+
+  function renderSplit(first) {
+    if (!edit.editor) return;
+    const box = $('#split-preview');
+    const keep = box.scrollTop;
+    const out = renderer.render(edit.editor.getText(), { isResolved });
+    box.className = 'markdown-body markdown-preview-view markdown-rendered ' + cssClassesFrom(out.frontmatter).join(' ');
+    box.replaceChildren(buildFragment(out.html, { from: state.doc.path, depth: 0 }));
+    box.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'));
+    resolveEmbeds(box);
+    renderMermaid(box);
+    if (first) syncSplitScroll(); else box.scrollTop = keep;
+  }
+
+  function syncSplitScroll() {
+    if (edit.mode !== 'split' || !edit.editor) return;
+    const box = $('#split-preview');
+    box.scrollTop = edit.editor.scrollRatio() * Math.max(0, box.scrollHeight - box.clientHeight);
+  }
+
+  function saveDoc(force) {
+    if (!edit.editor || !edit.path) {
+      if (!edit.dirty) toast('저장할 변경 사항이 없습니다.');
+      return Promise.resolve(true);
+    }
+    const text = edit.editor.getText();
+    const reqId = 'w' + (++edit.saveSeq);
+    return new Promise((resolve) => {
+      edit.waiters.set(reqId, { resolve, text });
+      send({ type: 'save', reqId, path: edit.path, text, baseMtime: edit.baseMtime, force: !!force });
+    });
+  }
+
+  function onSaveResult(msg) {
+    const w = edit.waiters.get(msg.reqId);
+    if (!w) return;
+    edit.waiters.delete(msg.reqId);
+    if (msg.ok) {
+      edit.baseMtime = msg.mtime;
+      edit.pendingExternal = null;
+      $('#edit-banner').hidden = true;
+      if (edit.editor && edit.editor.getText() === w.text) setDirty(false);
+      if (state.doc && state.doc.path === edit.path) { state.doc.markdown = w.text; state.doc.mtime = msg.mtime; }
+      if (edit.mode === 'read') { renderBody(w.text); $('#btn-save').hidden = true; }
+      toast('저장했습니다');
+      w.resolve(true);
+      return;
+    }
+    if (msg.conflict) {
+      if (window.confirm('이 파일이 다른 프로그램(예: Obsidian)에서 바뀌었습니다.\n지금 편집한 내용으로 덮어쓸까요?')) saveDoc(true).then(w.resolve);
+      else w.resolve(false);
+      return;
+    }
+    toast('⚠ 저장하지 못했습니다: ' + (msg.error || '알 수 없는 오류'));
+    w.resolve(false);
+  }
+
+  /** 편집 중인 파일이 다시 로드됨 (바깥에서 수정됐거나 같은 탭으로 돌아옴) */
+  function onEditedFileReloaded(msg) {
+    const mine = edit.editor.getText();
+    if (msg.markdown === mine) { edit.baseMtime = msg.mtime; return; }
+    if (!edit.dirty) {
+      edit.editor.setText(msg.markdown);
+      edit.baseMtime = msg.mtime;
+      setDirty(false);
+      if (edit.mode === 'split') renderSplit(false);
+      return;
+    }
+    if (msg.mtime !== edit.baseMtime) {
+      edit.pendingExternal = { markdown: msg.markdown, mtime: msg.mtime };
+      $('#edit-banner').hidden = false;
+    }
   }
 
   // ───────────── 임베드 해석 ─────────────
@@ -632,7 +854,7 @@
       el.setAttribute('role', 'tab');
       el.innerHTML = '<span class="tab-title"></span><button class="tab-close" title="닫기 (Ctrl+W)">' +
         '<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>';
-      el.querySelector('.tab-title').textContent = t.title;
+      el.querySelector('.tab-title').textContent = (edit.dirty && t.id === state.activeTab ? '● ' : '') + t.title;
       box.appendChild(el);
     }
     const active = box.querySelector('.tab.active');
@@ -1130,6 +1352,8 @@
 
   function applyZoom() {
     docEl.style.zoom = String(state.zoom);
+    $('#split-preview').style.zoom = String(state.zoom);
+    document.documentElement.style.setProperty('--ed-zoom', String(state.zoom));
     $('#zoom-label').textContent = Math.round(state.zoom * 100) + '%';
   }
   function setZoom(z) {
@@ -1160,6 +1384,9 @@
   }
 
   function showWelcome(msg) {
+    destroyEditor();
+    if (edit.mode !== 'read') applyMode('read');
+    $('#btn-edit').disabled = true;
     state.doc = null;
     docEl.hidden = true;
     docEl.replaceChildren();
@@ -1214,8 +1441,30 @@
     zoomOut: () => setZoom(state.zoom - 0.1),
     zoomReset: () => setZoom(1),
     theme: () => setTheme(isDark() ? 'light' : 'dark', true),
-    print: () => window.print(),
+    print: () => {
+      if (edit.editor && edit.editor.getText() !== state.renderedText) renderBody(edit.editor.getText());
+      window.print();
+    },
     switcher: openSwitcher,
+    edit: () => setMode(edit.mode === 'read' ? edit.lastMode : 'read'),
+    modeEdit: () => setMode('edit'),
+    modeSplit: () => setMode('split'),
+    save: () => saveDoc(false),
+    reloadExternal: () => {
+      const p = edit.pendingExternal;
+      if (!p || !edit.editor) return;
+      edit.editor.setText(p.markdown);
+      edit.baseMtime = p.mtime;
+      edit.pendingExternal = null;
+      $('#edit-banner').hidden = true;
+      setDirty(false);
+      if (edit.mode === 'split') renderSplit(false);
+    },
+    keepMine: () => {
+      if (edit.pendingExternal) edit.baseMtime = edit.pendingExternal.mtime; // 다음 저장 때 내 내용으로 덮어씀
+      edit.pendingExternal = null;
+      $('#edit-banner').hidden = true;
+    },
     togglePreview: () => {
       state.hoverPreview = !state.hoverPreview; syncMenuChecks();
       if (!state.hoverPreview) hidePreview(true);
@@ -1257,7 +1506,7 @@
     const recentA = e.target.closest('#recent-list a[data-path]');
     if (recentA) { e.preventDefault(); send(nav({ type: 'openPath', path: recentA.dataset.path, newTab: e.ctrlKey })); return; }
 
-    const a = e.target.closest('#doc a, #preview a');
+    const a = e.target.closest('#doc a, #preview a, #split-preview a');
     if (a) {
       const inPreview = !!a.closest('#preview');
       handleDocLink(a, e, e.ctrlKey || e.metaKey);
@@ -1320,18 +1569,21 @@
   }, { passive: false });
 
   document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented) return; // 편집기가 이미 처리한 키
     const k = e.key;
     const lk = k.length === 1 ? k.toLowerCase() : k;
     const ctrl = e.ctrlKey || e.metaKey;
     const shift = e.shiftKey;
-    const inInput = e.target.tagName === 'INPUT';
+    const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
     if (inInput && e.target.id === 'find-input') {
       if (k === 'Enter') { e.preventDefault(); shift ? commands.findPrev() : commands.findNext(); return; }
       if (k === 'Escape') { e.preventDefault(); closeFind(); return; }
     }
     let fn = null;
     if (!$('#switcher').hidden) return; // 빠른 이동 창이 키 입력을 처리
-    if (ctrl && shift && lk === 'p') fn = commands.print;
+    if (ctrl && !shift && lk === 'e') fn = commands.edit;
+    else if (ctrl && !shift && lk === 's') fn = commands.save;
+    else if (ctrl && shift && lk === 'p') fn = commands.print;
     else if (ctrl && lk === 'p') fn = commands.switcher;
     else if (ctrl && shift && lk === 't') fn = commands.reopenTab;
     else if (ctrl && shift && lk === 'e') fn = commands.files;
@@ -1345,7 +1597,7 @@
     else if (ctrl && lk === 't') fn = commands.newTab;
     else if (ctrl && (lk === 'w' || k === 'F4')) fn = commands.closeTab;
     else if (ctrl && lk === 'o') fn = commands.open;
-    else if (ctrl && lk === 'f') fn = commands.find;
+    else if (ctrl && lk === 'f') fn = edit.mode === 'read' ? commands.find : () => edit.editor && edit.editor.openSearch();
     else if (ctrl && lk === 'd') fn = commands.theme;
     else if (ctrl && k === '\\') fn = commands.sidebar;
     else if (ctrl && (k === '=' || k === '+')) fn = commands.zoomIn;
@@ -1417,6 +1669,7 @@
       case 'scrollTo': scrollToAnchor(msg.anchor); break;
       case 'backlinks': onBacklinks(msg); break;
       case 'searchResults': onSearchResults(msg); break;
+      case 'saveResult': onSaveResult(msg); break;
       case 'toast': toast(msg.text); break;
       case 'error': toast('⚠ ' + msg.text); break;
     }

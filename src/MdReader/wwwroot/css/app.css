@@ -352,6 +352,38 @@ body.sidebar-hidden #sidebar, body.sidebar-hidden #sb-resizer { display: none; }
   font-size: 18px; font-weight: 600; color: var(--accent); pointer-events: none;
 }
 
+/* ───────── 편집 모드 ───────── */
+#editwrap { display: none; flex: 1; min-width: 0; position: relative; background: var(--bg); }
+body.mode-edit #main, body.mode-split #main { display: none; }
+body.mode-edit #editwrap, body.mode-split #editwrap { display: flex; }
+#editor { flex: 1; min-width: 0; height: 100%; overflow: hidden; }
+#editor .cm-editor { height: 100%; }
+#split-preview { display: none; flex: 1; min-width: 0; height: 100%; overflow-y: auto; border-left: 1px solid var(--border); background: var(--bg); }
+body.mode-split #split-preview { display: block; }
+#split-preview.markdown-body { max-width: none; margin: 0; padding: 28px 32px 120px; }
+body.mode-split #editor .cm-content { padding: 0 28px; }
+#edit-banner {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 30;
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  padding: 7px 8px 7px 14px; border-radius: 9px;
+  background: var(--bg); border: 1px solid rgba(236, 117, 0, 0.6); box-shadow: var(--shadow);
+  font-size: 13px; color: var(--text);
+}
+#edit-banner button {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-hover); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+#edit-banner button:first-of-type { background: var(--accent); border-color: var(--accent); color: #fff; }
+.seg { display: inline-flex; margin-right: 4px; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button {
+  height: 26px; padding: 0 11px; border: 0; background: none;
+  color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--bg-hover); color: var(--text); }
+.seg button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+#dirty-dot { margin-left: 5px; color: var(--accent); font-size: 11px; vertical-align: 1px; }
+
 /* ───────── 링크 미리보기 ───────── */
 .hover-popover {
   position: fixed; z-index: 55;
@@ -623,7 +655,8 @@ details.callout:not([open]) { padding-bottom: 10px; }
 
 /* 인쇄 */
 @media print {
-  #toolbar, #tabbar, #sidebar, #sb-resizer, #findbar, #toast, #drop-overlay, #preview, #switcher { display: none !important; }
+  #toolbar, #tabbar, #sidebar, #sb-resizer, #findbar, #toast, #drop-overlay, #preview, #switcher, #editwrap { display: none !important; }
+  body.mode-edit #main, body.mode-split #main { display: block !important; }
   body, html { overflow: visible; height: auto; }
   #layout, #main { display: block; height: auto; overflow: visible; }
   .markdown-body { max-width: none; padding: 0; zoom: 1 !important; }
