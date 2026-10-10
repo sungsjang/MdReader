@@ -1,5 +1,5 @@
 // 사용법: cd tools/vendor && npm install && npm run build
-// 결과: src/MdReader/wwwroot/vendor/{vendor.js, mermaid.min.js, katex/}
+// 결과: src/MdReader/wwwroot/vendor/{vendor.js, editor.js, mermaid.min.js, katex/}
 import { build } from 'esbuild';
 import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -18,6 +18,14 @@ await build({
   entryPoints: [join(here, 'vendor-entry.js')],
   bundle: true, minify: true, format: 'iife', target: 'chrome110',
   outfile: join(out, 'vendor.js'),
+  legalComments: 'external',
+  nodePaths: [join(here, 'node_modules'), ...(process.env.NODE_PATH ? [process.env.NODE_PATH] : [])]
+});
+
+await build({
+  entryPoints: [join(here, 'editor-entry.js')],
+  bundle: true, minify: true, format: 'iife', target: 'chrome110',
+  outfile: join(out, 'editor.js'),
   legalComments: 'external',
   nodePaths: [join(here, 'node_modules'), ...(process.env.NODE_PATH ? [process.env.NODE_PATH] : [])]
 });

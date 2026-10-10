@@ -1,0 +1,35 @@
+name: vendor
+
+# tools/vendor 의 JS 라이브러리 번들을 다시 만든다.
+# 결과는 vendor-bundle 브랜치에 올라가며, 확인 후 main 으로 가져온다.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tools/vendor/**']
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        working-directory: tools/vendor
+        run: npm install --no-audit --no-fund
+      - name: Build
+        working-directory: tools/vendor
+        run: npm run build
+      - name: Push to vendor-bundle branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B vendor-bundle
+          git add -f src/MdReader/wwwroot/vendor tools/vendor/package-lock.json
+          git commit -m "vendor bundle from ${GITHUB_SHA::7}" || echo "no changes"
+          git push -f origin vendor-bundle
