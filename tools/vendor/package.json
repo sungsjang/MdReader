@@ -1,0 +1,19 @@
+{
+  "name": "mdreader-vendor",
+  "private": true,
+  "description": "MdReader 뷰어용 JS 라이브러리 번들 빌드",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.14",
+    "highlight.js": "11.12.0",
+    "js-yaml": "3.15.1",
+    "katex": "0.16.47",
+    "markdown-it": "14.2.0",
+    "mermaid": "11.16.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -1,0 +1,3 @@
+/* 데모 스니펫: 제목 앞에 표시 + cssclasses: wide 지원 */
+.markdown-preview-view h2::before { content: "§ "; color: var(--text-faint); }
+.markdown-preview-view.wide { --file-line-width: 1000px; }
