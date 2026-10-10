@@ -34,6 +34,9 @@ Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
     결과를 누르면 해당 노트가 열리고 검색어가 문서 안에서 강조됨
   - 목차: 현재 위치 강조
   - 백링크: 이 노트를 `[[링크]]`·`[텍스트](노트.md)`로 가리키는 노트와 그 줄
+- **링크 미리보기** — 내부 링크에 마우스를 올리면 그 노트(또는 `#제목`·`#^블록` 구간, 그림)를 팝업으로 보여줌. 메뉴에서 끌 수 있음
+- **빠른 이동** (Ctrl+P) — 노트 이름 일부나 **초성**(`ㅍㄹㅈㅌ` → 프로젝트 계획)으로 바로 열기. 빈 칸이면 최근 파일
+- **읽던 위치 기억** — 파일을 다시 열면 마지막으로 읽던 곳에서 시작 (최근 300개 파일)
 - 본문의 `#태그`를 누르면 볼트 전체에서 그 태그를 검색
 - **Obsidian CSS 스니펫** — `.obsidian/appearance.json`에서 켜 둔 스니펫을 그대로 적용.
   Obsidian과 같은 이름의 CSS 변수(`--background-primary`, `--text-normal`, `--callout-color` …)와
@@ -46,6 +49,7 @@ Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
 
 | 단축키 | 동작 |
 |---|---|
+| Ctrl+P | 빠른 이동 (노트 이름·초성) |
 | Ctrl+O | 열기 (여러 개 선택 가능) |
 | Ctrl+T / Ctrl+W / Ctrl+Shift+T | 새 탭 / 탭 닫기 / 닫은 탭 다시 열기 |
 | Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+1~9 | 다음 탭 / 이전 탭 / N번째 탭 |
@@ -55,7 +59,7 @@ Obsidian 노트를 잘 읽는 **읽기 전용 마크다운 뷰어** (Windows).
 | Ctrl+D | 라이트/다크 전환 |
 | Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+휠 | 확대 / 축소 / 100% |
 | F5 | 새로고침 |
-| Ctrl+P | 인쇄 (PDF로 저장 가능) |
+| Ctrl+Shift+P | 인쇄 (PDF로 저장 가능) |
 
 ## 빌드
 
@@ -77,8 +81,8 @@ GitHub에 올리면 `.github/workflows/build.yml`이 Windows 러너에서 포터
 [Inno Setup 6](https://jrsoftware.org/isdl.php)을 설치(`winget install JRSoftware.InnoSetup`)한 뒤:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 0.2.0
-# → dist\MdReader-Setup-0.2.0.exe
+powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 0.3.0
+# → dist\MdReader-Setup-0.3.0.exe
 ```
 
 설치 파일은 .NET 런타임을 포함(self-contained)하므로 다른 PC에 .NET이 없어도 됩니다.
@@ -131,6 +135,7 @@ tests/render_test.py       헤드리스 Chromium 렌더링 테스트 (Playwright
 - [x] 2단계 Obsidian 문법 — 볼트 인식, 위키링크, 임베드, 콜아웃 등
 - [x] 3단계 읽기 편의 — 목차, 찾기, 수식, Mermaid, 구문 강조, 확대, 기록
 - [x] 4단계 — 탭·단일 창, 파일 탐색 사이드바, 백링크, 볼트 검색·태그 검색, CSS 스니펫, 설치 프로그램
+- [x] 링크 미리보기, 빠른 이동(초성 검색), 읽던 위치 기억
 - [ ] 다음 후보 — 탭 끌어서 순서 바꾸기, 나가는 링크/언링크드 멘션, 그래프 뷰, Canvas(.canvas) 보기,
       Obsidian 테마(.obsidian/themes) 적용, 자동 업데이트
 

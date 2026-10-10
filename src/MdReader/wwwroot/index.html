@@ -52,15 +52,17 @@
           <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
         </button>
         <div id="menu" class="menu" hidden>
+          <button data-cmd="switcher">빠른 이동 <kbd>Ctrl+P</kbd></button>
           <button data-cmd="newTab">새 탭 <kbd>Ctrl+T</kbd></button>
           <button data-cmd="reopenTab">닫은 탭 다시 열기 <kbd>Ctrl+Shift+T</kbd></button>
           <hr>
           <button data-cmd="reload">새로고침 <kbd>F5</kbd></button>
-          <button data-cmd="print">인쇄 / PDF로 저장 <kbd>Ctrl+P</kbd></button>
+          <button data-cmd="print">인쇄 / PDF로 저장 <kbd>Ctrl+Shift+P</kbd></button>
           <hr>
           <button data-cmd="showInFolder">탐색기에서 보기</button>
           <button data-cmd="openInObsidian" id="menu-obsidian">Obsidian에서 열기</button>
           <hr>
+          <button data-cmd="togglePreview" class="menu-check" id="menu-preview">링크에 마우스를 올리면 미리보기</button>
           <button data-cmd="toggleSnippets" class="menu-check" id="menu-snippets">Obsidian CSS 스니펫 적용</button>
           <button data-cmd="toggleRestore" class="menu-check" id="menu-restore">시작할 때 탭 복원</button>
           <button data-cmd="registerOpenWith">.md 파일 '연결 프로그램'에 등록</button>
@@ -145,6 +147,19 @@
       </div>
       <article id="doc" class="markdown-body markdown-preview-view markdown-rendered" hidden></article>
     </main>
+  </div>
+
+  <div id="preview" class="hover-popover" hidden>
+    <div class="hp-head"><a href="#" class="internal-link hp-title"></a><span class="hp-hint">클릭: 열기 · Ctrl+클릭: 새 탭</span></div>
+    <div class="hp-body markdown-body markdown-preview-view"></div>
+  </div>
+
+  <div id="switcher" class="modal" hidden>
+    <div class="sw-box" role="dialog" aria-label="빠른 이동">
+      <input id="sw-input" type="text" placeholder="노트 이름으로 이동 (초성 검색 가능: ㅍㄹㅈㅌ)" autocomplete="off" spellcheck="false">
+      <ul id="sw-list"></ul>
+      <div class="sw-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 선택</span><span><kbd>Enter</kbd> 열기</span><span><kbd>Ctrl+Enter</kbd> 새 탭</span><span><kbd>Esc</kbd> 닫기</span></div>
+    </div>
   </div>
 
   <div id="toast" hidden></div>

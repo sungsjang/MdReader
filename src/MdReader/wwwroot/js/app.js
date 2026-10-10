@@ -40,6 +40,9 @@
     sidebarWidth: 260,
     cssSnippets: true,
     restoreSession: true,
+    hoverPreview: true,
+    recent: [],
+    previewCache: new Map(), // 링크 대상 → resolved 메시지
     pending: new Map(),
     reqSeq: 0,
     backlinksFor: null,
@@ -130,6 +133,9 @@
     const prev = state.doc;
     state.doc = msg;
     state.pending.clear();
+    if (msg.recent) state.recent = msg.recent;
+    hidePreview(true);
+    if (!prev || prev.path !== msg.path) state.previewCache.clear();
     if (msg.notes) setIndex(msg.vaultKey, msg.notes);
     $('#vault-css').textContent = msg.css || '';
 
@@ -156,7 +162,8 @@
 
     if (keepScroll !== null) mainEl.scrollTop = keepScroll;
     else if (msg.anchor) requestAnimationFrame(() => scrollToAnchor(msg.anchor));
-    else mainEl.scrollTop = msg.scroll || 0;
+    else restoreScroll(msg.scroll || 0);
+    if (msg.restored && !msg.anchor && !msg.find) toast('마지막으로 읽던 위치에서 열었습니다 (Home: 맨 위로)');
 
     if (msg.find) {
       $('#find-input').value = msg.find;
@@ -200,6 +207,7 @@
   }
 
   function onResolved(msg) {
+    if (msg.id && msg.id.startsWith('p')) { onPreviewResolved(msg); return; }
     const job = state.pending.get(msg.id);
     if (!job) return;
     state.pending.delete(msg.id);
@@ -312,6 +320,303 @@
     });
     renderMermaid(docEl);
   }
+
+  // ───────────── 읽던 위치 ─────────────
+  let scrollReportTimer = null;
+  let programmaticScroll = false;
+  let userScrolledSinceLoad = false;
+
+  /** 이미지가 늦게 로드되면 문서 높이가 바뀌므로 잠시 뒤 한 번 더 맞춘다 */
+  function restoreScroll(y) {
+    userScrolledSinceLoad = false;
+    programmaticScroll = true;
+    mainEl.scrollTop = y;
+    if (y > 0) {
+      setTimeout(() => { if (!userScrolledSinceLoad) { programmaticScroll = true; mainEl.scrollTop = y; } }, 450);
+      setTimeout(() => { if (!userScrolledSinceLoad) { programmaticScroll = true; mainEl.scrollTop = y; } }, 1200);
+    }
+  }
+
+  mainEl.addEventListener('scroll', () => {
+    if (programmaticScroll) { programmaticScroll = false; } else { userScrolledSinceLoad = true; }
+    hidePreview(true);
+    if (!state.doc) return;
+    clearTimeout(scrollReportTimer);
+    scrollReportTimer = setTimeout(() => send({ type: 'scrollPos', scroll: mainEl.scrollTop }), 700);
+  }, { passive: true });
+
+  // ───────────── 링크 미리보기 ─────────────
+  const previewEl = $('#preview');
+  const preview = { timer: null, hideTimer: null, anchor: null, reqId: null };
+
+  function hidePreview(immediate) {
+    clearTimeout(preview.timer);
+    clearTimeout(preview.hideTimer);
+    const go = () => { previewEl.hidden = true; preview.anchor = null; preview.reqId = null; };
+    if (immediate) go(); else preview.hideTimer = setTimeout(go, 280);
+  }
+
+  function placePreview(a) {
+    const r = a.getBoundingClientRect();
+    const W = Math.min(480, window.innerWidth - 24);
+    previewEl.style.width = W + 'px';
+    previewEl.hidden = false;
+    const H = previewEl.offsetHeight;
+    let left = Math.min(Math.max(12, r.left), window.innerWidth - W - 12);
+    let top = r.bottom + 8;
+    if (top + H > window.innerHeight - 12 && r.top - H - 8 > 12) top = r.top - H - 8;
+    previewEl.style.left = left + 'px';
+    previewEl.style.top = Math.max(12, top) + 'px';
+  }
+
+  function fillPreview(a, title, target, from, build) {
+    previewEl.dataset.from = from || (state.doc && state.doc.path) || '';
+    const head = previewEl.querySelector('.hp-title');
+    head.textContent = title;
+    head.setAttribute('data-href', target);
+    const body = previewEl.querySelector('.hp-body');
+    body.replaceChildren();
+    build(body);
+    body.scrollTop = 0;
+    placePreview(a);
+  }
+
+  function renderPreviewMarkdown(body, md, from) {
+    const out = renderer.render(md, { isResolved, showProperties: false, headingIds: Object.create(null) });
+    body.appendChild(buildFragment(out.html, { from, depth: 1 }));
+    body.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'));
+    resolveEmbeds(body);
+    renderMermaid(body);
+  }
+
+  function showPreview(a) {
+    if (!state.doc || !a.isConnected) return;
+    const target = a.getAttribute('data-href') || '';
+    if (!target) return;
+    preview.anchor = a;
+    const hostNote = a.closest('.embed-note');
+    const from = (hostNote && hostNote.dataset.from) || state.doc.path;
+
+    // 같은 문서 안의 제목/블록
+    if (target.startsWith('#')) {
+      const part = renderer.extractSection(state.doc.markdown, target.slice(1));
+      fillPreview(a, state.doc.name + ' › ' + target.slice(1), target, from, (body) => {
+        if (part == null) body.innerHTML = '<div class="hp-empty">구간을 찾을 수 없습니다.</div>';
+        else renderPreviewMarkdown(body, part, state.doc.path);
+      });
+      return;
+    }
+    if (a.classList.contains('is-unresolved')) {
+      fillPreview(a, target, target, from, (body) => {
+        body.innerHTML = '<div class="hp-empty">아직 만들어지지 않은 노트입니다.</div>';
+      });
+      return;
+    }
+    const cached = state.previewCache.get(from + '|' + target);
+    if (cached) { onPreviewResolved(Object.assign({}, cached, { id: null }), a); return; }
+
+    preview.reqId = 'p' + (++state.reqSeq);
+    preview.pendingKey = from + '|' + target;
+    send({ type: 'resolve', id: preview.reqId, target, relative: false, from });
+  }
+
+  function onPreviewResolved(msg, anchorOverride) {
+    const a = anchorOverride || preview.anchor;
+    if (!anchorOverride) {
+      if (msg.id !== preview.reqId) return;
+      state.previewCache.set(preview.pendingKey, msg);
+    }
+    if (!a || !a.isConnected) return;
+    const target = a.getAttribute('data-href') || '';
+    const hostNote = a.closest('.embed-note');
+    const from = (hostNote && hostNote.dataset.from) || state.doc.path;
+    const hash = target.indexOf('#');
+    const sub = hash >= 0 ? target.slice(hash + 1) : '';
+    const title = msg.found ? (msg.name || target) + (sub ? ' › ' + sub : '') : target;
+    fillPreview(a, title, target, from, (body) => {
+      if (!msg.found) { body.innerHTML = '<div class="hp-empty">찾을 수 없습니다.</div>'; return; }
+      if (msg.kind === 'image') {
+        const img = document.createElement('img');
+        img.src = msg.url; img.alt = msg.name; img.className = 'hp-image';
+        img.onload = () => placePreview(a);
+        body.appendChild(img);
+        return;
+      }
+      if (msg.kind !== 'note') { body.innerHTML = '<div class="hp-empty">미리볼 수 없는 파일입니다: ' + esc(msg.name) + '</div>'; return; }
+      let md = msg.markdown || '';
+      if (sub) {
+        const part = renderer.extractSection(md, sub);
+        if (part == null) { body.innerHTML = '<div class="hp-empty">구간을 찾을 수 없습니다: ' + esc(sub) + '</div>'; return; }
+        md = part;
+      }
+      if (!md.trim()) { body.innerHTML = '<div class="hp-empty">빈 노트입니다.</div>'; return; }
+      renderPreviewMarkdown(body, md, msg.path);
+    });
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    if (!state.hoverPreview) return;
+    if (e.target.closest('#preview')) { clearTimeout(preview.hideTimer); return; }
+    const a = e.target.closest('#doc a.internal-link');
+    if (!a || a.classList.contains('embed-file')) return;
+    if (a === preview.anchor && !previewEl.hidden) { clearTimeout(preview.hideTimer); return; }
+    clearTimeout(preview.timer);
+    clearTimeout(preview.hideTimer);
+    preview.timer = setTimeout(() => showPreview(a), 380);
+  });
+  document.addEventListener('mouseout', (e) => {
+    const from = e.target.closest('#doc a.internal-link, #preview');
+    if (!from) return;
+    const to = e.relatedTarget;
+    if (to && to.closest && (to.closest('#preview') || from.contains(to) || (preview.anchor && preview.anchor.contains(to)))) return;
+    clearTimeout(preview.timer);
+    if (!previewEl.hidden) hidePreview(false);
+  });
+
+  // ───────────── 빠른 이동 (Ctrl+P) ─────────────
+  const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+  function choseong(s) {
+    let out = '';
+    for (const ch of s) {
+      const c = ch.charCodeAt(0);
+      out += c >= 0xAC00 && c <= 0xD7A3 ? CHO[Math.floor((c - 0xAC00) / 588)] : ch.toLowerCase();
+    }
+    return out;
+  }
+  /** 순서대로 들어 있는 글자 매칭 점수 (-1 = 불일치) */
+  function fuzzyScore(q, s) {
+    if (!q) return 0;
+    const sub = s.indexOf(q);
+    if (sub >= 0) return 100 - sub + (sub === 0 ? 50 : 0) - s.length * 0.05;
+    let qi = 0, score = 0, last = -2;
+    for (let i = 0; i < s.length && qi < q.length; i++) {
+      if (s[i] !== q[qi]) continue;
+      score += last === i - 1 ? 4 : 1;
+      if (i === 0 || /[\s\/_\-.]/.test(s[i - 1])) score += 3;
+      last = i; qi++;
+    }
+    return qi === q.length ? score - s.length * 0.05 : -1;
+  }
+
+  const sw = { items: [], sel: 0 };
+  function switcherItems() {
+    const idx = currentIndex();
+    if (!idx) return [];
+    if (!idx.items) {
+      idx.items = idx.paths.filter((p) => VIEWABLE.test(p)).map((p) => {
+        const name = p.split('/').pop().replace(/\.(md|markdown|mdown|mkd|txt)$/i, '');
+        return { rel: p, name, dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', lname: name.toLowerCase(), lpath: p.toLowerCase(), cho: choseong(name) };
+      });
+    }
+    return idx.items;
+  }
+
+  function openSwitcher() {
+    hidePreview(true);
+    $('#switcher').hidden = false;
+    const inp = $('#sw-input');
+    inp.value = '';
+    renderSwitcher();
+    inp.focus();
+  }
+  function closeSwitcher() { $('#switcher').hidden = true; }
+
+  function renderSwitcher() {
+    const q = $('#sw-input').value.trim().toLowerCase();
+    const choMode = /^[ㄱ-ㅎ]+$/.test(q);
+    const list = [];
+    const all = switcherItems();
+    if (!q) {
+      const vaultRoot = state.doc && state.doc.vaultRoot ? state.doc.vaultRoot.replace(/\\/g, '/').toLowerCase() : null;
+      for (const p of state.recent) {
+        if (state.doc && p === state.doc.path) continue;
+        const norm = p.replace(/\\/g, '/');
+        list.push({ path: p, name: norm.split('/').pop().replace(/\.md$/i, ''), dir: norm.slice(0, norm.lastIndexOf('/')), recent: true,
+          inVault: vaultRoot && norm.toLowerCase().startsWith(vaultRoot + '/') });
+        if (list.length >= 8) break;
+      }
+      const shown = new Set(list.map((x) => x.name.toLowerCase()));
+      for (const it of all.slice().sort((a, b) => collator.compare(a.name, b.name))) {
+        if (list.length >= 60) break;
+        if (!shown.has(it.lname)) list.push(it);
+      }
+    } else {
+      const scored = [];
+      for (const it of all) {
+        let sc = choMode ? fuzzyScore(q, it.cho) : Math.max(fuzzyScore(q, it.lname) * 2, fuzzyScore(q, it.lpath));
+        if (sc >= 0) scored.push([sc, it]);
+      }
+      scored.sort((a, b) => b[0] - a[0] || collator.compare(a[1].name, b[1].name));
+      for (const [, it] of scored.slice(0, 60)) list.push(it);
+    }
+    sw.items = list;
+    sw.sel = 0;
+    const ul = $('#sw-list');
+    ul.replaceChildren();
+    if (!list.length) {
+      ul.innerHTML = '<li class="sw-empty">' + (state.doc ? '일치하는 노트가 없습니다.' : '먼저 문서를 하나 열면 같은 볼트의 노트로 이동할 수 있습니다.') + '</li>';
+      return;
+    }
+    list.forEach((it, i) => {
+      const li = document.createElement('li');
+      li.className = 'sw-item' + (i === 0 ? ' sel' : '');
+      li.dataset.i = i;
+      li.innerHTML = '<span class="sw-name"></span><span class="sw-dir"></span>';
+      li.querySelector('.sw-name').innerHTML = (it.recent ? '<span class="sw-recent">최근</span>' : '') + highlightFuzzy(it.name, q, choMode);
+      li.querySelector('.sw-dir').textContent = it.dir;
+      ul.appendChild(li);
+    });
+  }
+
+  function highlightFuzzy(name, q, choMode) {
+    if (!q) return esc(name);
+    const target = choMode ? choseong(name) : name.toLowerCase();
+    const marks = new Set();
+    const sub = target.indexOf(q);
+    if (sub >= 0) for (let i = 0; i < q.length; i++) marks.add(sub + i);
+    else {
+      let qi = 0;
+      for (let i = 0; i < target.length && qi < q.length; i++) if (target[i] === q[qi]) { marks.add(i); qi++; }
+    }
+    let out = '';
+    [...name].forEach((ch, i) => { out += marks.has(i) ? '<b>' + esc(ch) + '</b>' : esc(ch); });
+    return out;
+  }
+
+  function moveSel(d) {
+    if (!sw.items.length) return;
+    const lis = $('#sw-list').children;
+    lis[sw.sel] && lis[sw.sel].classList.remove('sel');
+    sw.sel = (sw.sel + d + sw.items.length) % sw.items.length;
+    lis[sw.sel].classList.add('sel');
+    lis[sw.sel].scrollIntoView({ block: 'nearest' });
+  }
+
+  function openSel(newTab) {
+    const it = sw.items[sw.sel];
+    if (!it) return;
+    closeSwitcher();
+    if (it.rel) send(nav({ type: 'openRel', vaultKey: state.doc.vaultKey, rel: it.rel, newTab }));
+    else send(nav({ type: 'openPath', path: it.path, newTab }));
+  }
+
+  $('#sw-input').addEventListener('input', renderSwitcher);
+  $('#sw-input').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); openSel(e.ctrlKey || e.metaKey); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeSwitcher(); }
+    e.stopPropagation();
+  });
+  $('#sw-list').addEventListener('mousemove', (e) => {
+    const li = e.target.closest('.sw-item');
+    if (li && +li.dataset.i !== sw.sel) moveSel(+li.dataset.i - sw.sel);
+  });
+  $('#sw-list').addEventListener('click', (e) => {
+    const li = e.target.closest('.sw-item');
+    if (li) { sw.sel = +li.dataset.i; openSel(e.ctrlKey || e.metaKey); }
+  });
+  $('#switcher').addEventListener('mousedown', (e) => { if (e.target.id === 'switcher') closeSwitcher(); });
 
   // ───────────── 탭 ─────────────
   function renderTabs(msg) {
@@ -836,6 +1141,7 @@
   function syncMenuChecks() {
     $('#menu-snippets').classList.toggle('checked', state.cssSnippets);
     $('#menu-restore').classList.toggle('checked', state.restoreSession);
+    $('#menu-preview').classList.toggle('checked', state.hoverPreview);
   }
 
   // ───────────── 기타 UI ─────────────
@@ -909,6 +1215,12 @@
     zoomReset: () => setZoom(1),
     theme: () => setTheme(isDark() ? 'light' : 'dark', true),
     print: () => window.print(),
+    switcher: openSwitcher,
+    togglePreview: () => {
+      state.hoverPreview = !state.hoverPreview; syncMenuChecks();
+      if (!state.hoverPreview) hidePreview(true);
+      send({ type: 'setting', key: 'hoverPreview', value: state.hoverPreview });
+    },
     menu: () => { $('#menu').hidden = !$('#menu').hidden; },
     showInFolder: () => send({ type: 'showInFolder' }),
     openInObsidian: () => send({ type: 'openInObsidian' }),
@@ -945,8 +1257,12 @@
     const recentA = e.target.closest('#recent-list a[data-path]');
     if (recentA) { e.preventDefault(); send(nav({ type: 'openPath', path: recentA.dataset.path, newTab: e.ctrlKey })); return; }
 
-    const a = e.target.closest('#doc a, #doc .embed-note a');
-    if (a) handleDocLink(a, e, e.ctrlKey || e.metaKey);
+    const a = e.target.closest('#doc a, #preview a');
+    if (a) {
+      const inPreview = !!a.closest('#preview');
+      handleDocLink(a, e, e.ctrlKey || e.metaKey);
+      if (inPreview) hidePreview(true);
+    }
   });
 
   // 가운데 버튼 클릭 → 새 탭
@@ -963,7 +1279,8 @@
     if (wl != null) {
       e.preventDefault();
       if (wl.startsWith('#') && !newTab) { scrollToAnchor(wl.slice(1)); return; }
-      const host = a.closest('.embed-note');
+      const host = a.closest('.embed-note, #preview');
+      if (wl.startsWith('#') && host && host.id === 'preview' && host.dataset.from === state.doc.path) { scrollToAnchor(wl.slice(1)); return; }
       send(nav({ type: 'navigate', target: wl, from: (host && host.dataset.from) || state.doc.path, newTab }));
       return;
     }
@@ -980,13 +1297,15 @@
     }
     if (/^(https?:|mailto:|obsidian:)/i.test(href)) { send({ type: 'external', url: href }); return; }
     if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^file:/i.test(href)) return; // 알 수 없는 스킴은 무시
-    const hostNote = a.closest('.embed-note');
+    const hostNote = a.closest('.embed-note, #preview');
     send(nav({ type: 'navigateHref', href, from: (hostNote && hostNote.dataset.from) || state.doc.path, newTab }));
   }
 
   document.addEventListener('mouseover', (e) => {
     const a = e.target.closest('a.internal-link, a.external-link');
-    if (a && !a.title) a.title = a.getAttribute('data-href') || a.getAttribute('href') || '';
+    if (!a || a.title) return;
+    if (state.hoverPreview && a.classList.contains('internal-link') && a.closest('#doc')) return; // 미리보기와 겹치지 않게
+    a.title = a.getAttribute('data-href') || a.getAttribute('href') || '';
   });
 
   document.addEventListener('mouseup', (e) => {
@@ -1011,7 +1330,10 @@
       if (k === 'Escape') { e.preventDefault(); closeFind(); return; }
     }
     let fn = null;
-    if (ctrl && shift && lk === 't') fn = commands.reopenTab;
+    if (!$('#switcher').hidden) return; // 빠른 이동 창이 키 입력을 처리
+    if (ctrl && shift && lk === 'p') fn = commands.print;
+    else if (ctrl && lk === 'p') fn = commands.switcher;
+    else if (ctrl && shift && lk === 't') fn = commands.reopenTab;
     else if (ctrl && shift && lk === 'e') fn = commands.files;
     else if (ctrl && shift && lk === 'f') fn = commands.search;
     else if (ctrl && shift && lk === 'o') fn = commands.toc;
@@ -1024,7 +1346,6 @@
     else if (ctrl && (lk === 'w' || k === 'F4')) fn = commands.closeTab;
     else if (ctrl && lk === 'o') fn = commands.open;
     else if (ctrl && lk === 'f') fn = commands.find;
-    else if (ctrl && lk === 'p') fn = commands.print;
     else if (ctrl && lk === 'd') fn = commands.theme;
     else if (ctrl && k === '\\') fn = commands.sidebar;
     else if (ctrl && (k === '=' || k === '+')) fn = commands.zoomIn;
@@ -1035,6 +1356,7 @@
     else if (e.altKey && k === 'ArrowLeft') fn = commands.back;
     else if (e.altKey && k === 'ArrowRight') fn = commands.forward;
     else if (k === 'Backspace' && !inInput) fn = commands.back;
+    else if (k === 'Escape' && !previewEl.hidden) fn = () => hidePreview(true);
     else if (k === 'Escape' && !$('#findbar').hidden) fn = closeFind;
     else if (!inInput && (k === 'Home' || k === 'End')) {
       e.preventDefault();
@@ -1077,6 +1399,7 @@
         state.sidebarWidth = msg.sidebarWidth || 260;
         state.cssSnippets = msg.cssSnippets !== false;
         state.restoreSession = msg.restoreSession !== false;
+        state.hoverPreview = msg.hoverPreview !== false;
         applyZoom();
         applySidebarWidth();
         syncMenuChecks();

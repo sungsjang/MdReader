@@ -59,7 +59,7 @@ window.__sent = [];
     reply(Object.assign({ type: 'load', tabId: t.id, path: p, name: p.split('/').pop().replace(/\.md$/, ''),
       relPath: p, vaultKey: 'v1.mdreader', vaultName: 'SampleVault', vaultRoot: 'C:/SampleVault', isVault: true,
       markdown: window.__notes[p], notes: t.sentIndex ? null : files, scroll: 0,
-      canBack: t.i > 0, canForward: t.i < t.hist.length - 1, css: H.css ? window.__css : null }, extra || {}));
+      canBack: t.i > 0, canForward: t.i < t.hist.length - 1, recent: ['Notes/프로젝트 계획.md'], css: H.css ? window.__css : null }, extra || {}));
     t.sentIndex = true;
   }
   function addTab() { const t = { id: ++H.seq, hist: [], i: -1 }; H.tabs.push(t); return t; }
@@ -72,7 +72,7 @@ window.__sent = [];
     window.__sent.push(msg);
     switch (msg.type) {
       case 'ready':
-        reply({ type: 'settings', theme: 'light', zoom: 1, sidebarVisible: true, sidebarPane: 'files', sidebarWidth: 260, cssSnippets: true, restoreSession: true });
+        reply({ type: 'settings', theme: 'light', zoom: 1, sidebarVisible: true, sidebarPane: 'files', sidebarWidth: 260, cssSnippets: true, restoreSession: true, hoverPreview: true });
         open('Welcome.md', true);
         break;
       case 'newTab': H.active = addTab().id; show(); break;
@@ -212,6 +212,32 @@ def main():
         page.click("#menu-snippets")
         page.wait_for_timeout(300)
         results["snippet_off"] = d("getComputedStyle(document.querySelector('#doc h2'), '::before').content")
+
+        # ── 링크 미리보기 ──
+        page.evaluate("window.__mdreader.handle({type:'settings', theme:'light', zoom:1, sidebarVisible:true, sidebarPane:'files', sidebarWidth:260, cssSnippets:true, restoreSession:true, hoverPreview:true})")
+        page.keyboard.press("Control+1")
+        page.wait_for_timeout(400)
+        page.evaluate("document.getElementById('main').scrollTop = 0")
+        page.hover("#doc a.internal-link >> text=프로젝트 계획 > 일정")
+        page.wait_for_selector("#preview:not([hidden]) .hp-body table", timeout=3000)
+        results["preview"] = d("({ title: document.querySelector('#preview .hp-title').textContent, body: document.querySelector('#preview .hp-body').innerText.slice(0, 60) })")
+        page.screenshot(path=str(OUT / "5-hover-preview.png"))
+        page.mouse.move(5, 500)
+        page.wait_for_timeout(500)
+        results["preview_hidden_after_leave"] = d("document.getElementById('preview').hidden")
+
+        # ── 빠른 이동 (초성) ──
+        page.keyboard.press("Control+p")
+        page.wait_for_selector("#switcher:not([hidden])")
+        results["switcher_empty_list"] = d("[...document.querySelectorAll('#sw-list .sw-name')].map(e => e.textContent)")
+        page.keyboard.type("ㅋㅇㅍ")
+        page.wait_for_timeout(150)
+        results["switcher_cho"] = d("[...document.querySelectorAll('#sw-list .sw-name')].map(e => e.textContent)")
+        page.screenshot(path=str(OUT / "6-switcher.png"))
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(400)
+        results["after_switch_title"] = d("document.getElementById('file-name').textContent")
+        results["scroll_reports"] = d("window.__sent.filter(m => m.type === 'scrollPos').length")
 
         browser.close()
     print(json.dumps(results, ensure_ascii=False, indent=1))

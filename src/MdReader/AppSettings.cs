@@ -17,7 +17,10 @@ public sealed class AppSettings
     public string SidebarPane { get; set; } = "files";   // files | search | toc | backlinks
     public double SidebarWidth { get; set; } = 260;
     public bool CssSnippets { get; set; } = true;
+    public bool HoverPreview { get; set; } = true;
     public bool RestoreSession { get; set; } = true;
+    /// <summary>파일별 마지막 읽은 위치 (최근 것이 앞)</summary>
+    public List<ReadingPosition> ReadingPositions { get; set; } = new();
     public List<string> OpenTabs { get; set; } = new();
     public int ActiveTab { get; set; }
 
@@ -51,10 +54,30 @@ public sealed class AppSettings
         catch { /* 저장 실패는 치명적이지 않음 */ }
     }
 
+    const int MaxReadingPositions = 300;
+
+    public double GetReadingPosition(string path) =>
+        ReadingPositions.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase))?.Scroll ?? 0;
+
+    public void SetReadingPosition(string path, double scroll)
+    {
+        ReadingPositions.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (scroll < 40) return; // 맨 위 근처는 기억하지 않음
+        ReadingPositions.Insert(0, new ReadingPosition { Path = path, Scroll = Math.Round(scroll) });
+        if (ReadingPositions.Count > MaxReadingPositions)
+            ReadingPositions.RemoveRange(MaxReadingPositions, ReadingPositions.Count - MaxReadingPositions);
+    }
+
     public void AddRecent(string path)
     {
         Recent.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
         Recent.Insert(0, path);
         if (Recent.Count > 15) Recent.RemoveRange(15, Recent.Count - 15);
     }
+}
+
+public sealed class ReadingPosition
+{
+    public string Path { get; set; } = "";
+    public double Scroll { get; set; }
 }

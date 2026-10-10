@@ -1,8 +1,8 @@
 ﻿# MdReader 설치 파일 만들기
 #   1) .NET 런타임 없이도 돌아가도록 self-contained 로 publish
 #   2) Inno Setup(ISCC)으로 dist\MdReader-Setup-<버전>.exe 생성
-# 사용법:  powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 [-Version 0.2.0]
-param([string]$Version = "0.2.0")
+# 사용법:  powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 [-Version 0.3.0]
+param([string]$Version = "0.3.0")
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot

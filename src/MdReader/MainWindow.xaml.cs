@@ -190,6 +190,7 @@ public partial class MainWindow : Window
                 case "closeTab": CloseTab(Int("id"), Scroll()); break;
                 case "switchTab": SwitchTab(Int("id"), Scroll()); break;
                 case "reopenTab": ReopenClosedTab(Scroll()); break;
+                case "scrollPos": SaveScroll(Scroll()); break;
 
                 // 문서 열기·이동
                 case "open": ShowOpenDialog(Scroll()); break;
@@ -242,6 +243,7 @@ public partial class MainWindow : Window
             sidebarPane = _settings.SidebarPane,
             sidebarWidth = _settings.SidebarWidth,
             cssSnippets = _settings.CssSnippets,
+            hoverPreview = _settings.HoverPreview,
             restoreSession = _settings.RestoreSession
         });
 
@@ -251,6 +253,7 @@ public partial class MainWindow : Window
             {
                 var t = AddTab();
                 t.History.Push(p);
+                t.History.SaveScroll(_settings.GetReadingPosition(p));
             }
             if (_tabs.Count > 0) _active = _tabs[Math.Clamp(_settings.ActiveTab, 0, _tabs.Count - 1)];
         }
@@ -274,6 +277,7 @@ public partial class MainWindow : Window
             case "sidebarPane" when value.ValueKind == JsonValueKind.String: _settings.SidebarPane = value.GetString()!; break;
             case "sidebarWidth" when value.ValueKind == JsonValueKind.Number: _settings.SidebarWidth = value.GetDouble(); break;
             case "restoreSession": _settings.RestoreSession = value.ValueKind == JsonValueKind.True; break;
+            case "hoverPreview": _settings.HoverPreview = value.ValueKind == JsonValueKind.True; break;
             case "cssSnippets":
                 _settings.CssSnippets = value.ValueKind == JsonValueKind.True;
                 ShowActive(keepScroll: true);
@@ -295,7 +299,13 @@ public partial class MainWindow : Window
 
     void SaveScroll(double? scroll)
     {
-        if (scroll.HasValue) _active?.History.SaveScroll(scroll.Value);
+        if (!scroll.HasValue || _active == null) return;
+        _active.History.SaveScroll(scroll.Value);
+        if (_active.Path != null)
+        {
+            _settings.SetReadingPosition(_active.Path, scroll.Value);
+            _saveDebounce.Trigger(_settings.Save);
+        }
     }
 
     void ActivateTab(DocTab tab)
@@ -430,7 +440,11 @@ public partial class MainWindow : Window
         _saveDebounce.Trigger(_settings.Save);
 
         if (samePage && find == null && anchor != null) { Post(new { type = "scrollTo", anchor }); return; }
-        ShowActive(keepScroll: false, anchor: anchor, find: find, scrollOverride: 0);
+
+        // 앵커·검색어 없이 여는 경우 마지막으로 읽던 위치에서 시작
+        double start = anchor == null && find == null && !samePage ? _settings.GetReadingPosition(full) : 0;
+        tab.History.SaveScroll(start);
+        ShowActive(keepScroll: false, anchor: anchor, find: find, scrollOverride: start, restored: start > 0);
     }
 
     void OpenRelative(string vaultKey, string rel, OpenMode mode, double? scroll, string? find)
@@ -452,7 +466,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>활성 탭의 문서를 읽어서 페이지로 보낸다.</summary>
-    void ShowActive(bool keepScroll, string? anchor = null, string? find = null, double? scrollOverride = null)
+    void ShowActive(bool keepScroll, string? anchor = null, string? find = null, double? scrollOverride = null, bool restored = false)
     {
         PostTabs();
         var path = _active?.Path;
@@ -503,6 +517,8 @@ public partial class MainWindow : Window
             keepScroll,
             canBack = _active.History.CanBack,
             canForward = _active.History.CanForward,
+            restored,
+            recent = _settings.Recent.Take(10).ToArray(),
             css = _settings.CssSnippets ? vault.GetSnippetCss() : null
         });
     }

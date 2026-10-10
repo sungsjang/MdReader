@@ -10,7 +10,7 @@
     <AssemblyName>MdReader</AssemblyName>
     <RootNamespace>MdReader</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Product>MdReader</Product>
     <Description>Obsidian 친화적인 읽기 전용 마크다운 뷰어</Description>
     <!-- Linux/macOS에서도 빌드 확인이 가능하도록 -->
