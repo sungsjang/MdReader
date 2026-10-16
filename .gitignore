@@ -6,3 +6,5 @@ publish/
 tools/vendor/node_modules/
 tests/out/
 dist/
+__pycache__/
+*.pyc
