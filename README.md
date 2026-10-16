@@ -7,6 +7,15 @@ Obsidian 노트를 잘 읽는 **마크다운 뷰어** (Windows) — 필요할 �
 - 렌더링은 markdown-it + 직접 작성한 Obsidian 확장 (`wwwroot/js/obsidian.js`)
 - 인터넷 연결 없이 동작 (라이브러리는 `wwwroot/vendor`에 포함)
 
+## 다운로드
+
+👉 **[Releases에서 설치 파일 받기](https://github.com/sungsjang/MdReader/releases/latest)** (`MdReader-Setup-x.y.z.exe`)
+— 초록색 Code → Download ZIP은 소스 코드입니다.
+
+![나란히 편집](docs/images/split-edit.png)
+
+📄 기획·개발 기록·사용법·개선 항목은 [docs/](docs/README.md)에 정리되어 있습니다.
+
 ## 지원 문법
 
 | 구분 | 내용 |
@@ -131,6 +140,7 @@ src/MdReader/
     vendor/                markdown-it, KaTeX, highlight.js, DOMPurify, js-yaml, Mermaid, CodeMirror 6(editor.js)
 installer/                 Inno Setup 스크립트 + 빌드 스크립트
 samples/SampleVault/       렌더링 확인용 샘플 볼트 (CSS 스니펫 포함)
+docs/                      기획·개발 기록·사용법·개선 항목, 스크린샷
 tests/render_test.py       헤드리스 Chromium 렌더링 테스트 (Playwright)
 ```
 
@@ -144,7 +154,7 @@ tests/render_test.py       헤드리스 Chromium 렌더링 테스트 (Playwright
 - [x] 4단계 — 탭·단일 창, 파일 탐색 사이드바, 백링크, 볼트 검색·태그 검색, CSS 스니펫, 설치 프로그램
 - [x] 링크 미리보기, 빠른 이동(초성 검색), 읽던 위치 기억
 - [x] 간단한 편집 모드 (편집/나란히, 저장, 자동완성, 충돌 확인)
-- [ ] 다음 후보 — 새 노트 만들기, 그림 붙여넣기, 탭 끌어서 순서 바꾸기, 나가는 링크/언링크드 멘션, 그래프 뷰, Canvas(.canvas) 보기,
+- [ ] 다음 후보 — [docs/04-개선항목.md](docs/04-개선항목.md) 참고. 새 노트 만들기, 그림 붙여넣기, 탭 끌어서 순서 바꾸기, 나가는 링크/언링크드 멘션, 그래프 뷰, Canvas(.canvas) 보기,
       Obsidian 테마(.obsidian/themes) 적용, 자동 업데이트
 
 ## 라이선스
